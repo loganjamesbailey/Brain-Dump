@@ -5,6 +5,8 @@ import Onboarding from './screens/Onboarding'
 import BrainDump from './screens/BrainDump'
 import Review from './screens/Review'
 import Home from './screens/Home'
+import ItemDetail from './screens/ItemDetail'
+import Settings from './screens/Settings'
 import StarField from './components/StarField'
 
 export default function App() {
@@ -36,6 +38,8 @@ export default function App() {
         {view === 'dump' && <BrainDump />}
         {view === 'review' && <Review />}
         {view === 'home' && <Home />}
+        {view === 'item' && <ItemDetail />}
+        {view === 'settings' && <Settings />}
       </div>
     </div>
   )

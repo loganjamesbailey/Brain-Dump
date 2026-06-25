@@ -1,26 +1,38 @@
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useApp } from '../store/store'
 import { db, type Item } from '../db/db'
-import { setItemStatus } from '../db/actions'
+import { markDone, markUndone } from '../db/actions'
 import { greeting } from '../lib/time'
 import { CADENCE_LABEL, CADENCE_ORDER, type Cadence } from '../lib/cadence'
+import { computeInsight } from '../lib/insights'
+import { selectFocus } from '../lib/focus'
+import { isResting } from '../lib/period'
+import ItemRow from '../components/ItemRow'
 
 export default function Home() {
   const go = useApp((s) => s.go)
+  const openItem = useApp((s) => s.openItem)
   const setFirstDump = useApp((s) => s.setFirstDump)
 
   const profile = useLiveQuery(() => db.profile.get('me'), [])
   const items = useLiveQuery(() => db.items.toArray(), [])
 
-  const active = (items ?? []).filter((i) => i.status === 'active' || i.status === 'done')
+  const now = Date.now()
+  const active = (items ?? []).filter((i) => i.status === 'active')
+  const insight = computeInsight(active, now)
+  const focus = selectFocus(active, now, insight.focusLimit)
 
   const byCadence = CADENCE_ORDER.map((cadence) => ({
     cadence,
     items: active
       .filter((i) => i.cadence === cadence)
-      .sort((a, b) => a.title.localeCompare(b.title)),
+      .sort((a, b) => Number(isResting(a, now)) - Number(isResting(b, now)) || a.title.localeCompare(b.title)),
   })).filter((g) => g.items.length > 0)
 
+  function toggle(item: Item) {
+    if (isResting(item, now)) markUndone(item.id)
+    else markDone(item.id)
+  }
   function startDump() {
     setFirstDump(false)
     go('dump')
@@ -31,8 +43,19 @@ export default function Home() {
   return (
     <div className="flex flex-1 flex-col">
       <div className="flex-1 overflow-y-auto px-6 pb-32 pt-14">
-        <p className="text-sm font-medium text-mist-400">{greeting(profile?.name)}</p>
-        <h1 className="mt-1 text-2xl font-semibold text-mist-100">Your map</h1>
+        <header className="flex items-start justify-between">
+          <div>
+            <p className="text-sm font-medium text-mist-400">{greeting(profile?.name)}</p>
+            <h1 className="mt-1 text-2xl font-semibold text-mist-100">{insight.headline}</h1>
+          </div>
+          <button
+            onClick={() => go('settings')}
+            aria-label="Settings"
+            className="mt-1 rounded-full p-2 text-mist-400 transition active:scale-90 hover:text-mist-100"
+          >
+            <GearIcon className="h-6 w-6" />
+          </button>
+        </header>
 
         {empty ? (
           <div className="mt-16 flex flex-col items-center text-center animate-fade-up">
@@ -43,15 +66,49 @@ export default function Home() {
             </p>
           </div>
         ) : (
-          <div className="mt-8 space-y-8">
-            {byCadence.map((group) => (
-              <CadenceSection key={group.cadence} cadence={group.cadence} items={group.items} />
-            ))}
-          </div>
+          <>
+            {insight.observations.length > 0 && (
+              <div className="card mt-5 animate-fade-up">
+                {insight.observations.map((o, i) => (
+                  <p key={i} className={`text-mist-300 ${i > 0 ? 'mt-2' : ''}`}>
+                    {o}
+                  </p>
+                ))}
+              </div>
+            )}
+
+            <section className="mt-8 animate-fade-up">
+              <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-nebula-300">
+                Right now
+              </h2>
+              {focus.length > 0 ? (
+                <div className="space-y-2">
+                  {focus.map((item) => (
+                    <ItemRow key={item.id} item={item} now={now} onToggle={toggle} onOpen={(i) => openItem(i.id)} showNextStep />
+                  ))}
+                </div>
+              ) : (
+                <div className="card text-mist-400">You're all caught up for now. Rest is allowed.</div>
+              )}
+            </section>
+
+            <div className="mt-10 space-y-8">
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-mist-500">Your map</h2>
+              {byCadence.map((group) => (
+                <CadenceSection
+                  key={group.cadence}
+                  cadence={group.cadence}
+                  items={group.items}
+                  now={now}
+                  onToggle={toggle}
+                  onOpen={(i) => openItem(i.id)}
+                />
+              ))}
+            </div>
+          </>
         )}
       </div>
 
-      {/* The one button that's always within reach. */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-space-800 via-space-800/90 to-transparent px-6 pb-8 pt-10">
         <button className="btn-primary pointer-events-auto w-full" onClick={startDump}>
           <MicIcon className="h-5 w-5" />
@@ -62,43 +119,39 @@ export default function Home() {
   )
 }
 
-function CadenceSection({ cadence, items }: { cadence: Cadence; items: Item[] }) {
+function CadenceSection({
+  cadence,
+  items,
+  now,
+  onToggle,
+  onOpen,
+}: {
+  cadence: Cadence
+  items: Item[]
+  now: number
+  onToggle: (i: Item) => void
+  onOpen: (i: Item) => void
+}) {
   return (
     <section className="animate-fade-up">
-      <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-nebula-300">
+      <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-nebula-300">
         {CADENCE_LABEL[cadence]}
-      </h2>
+      </h3>
       <div className="space-y-2">
         {items.map((item) => (
-          <ItemRow key={item.id} item={item} />
+          <ItemRow key={item.id} item={item} now={now} onToggle={onToggle} onOpen={onOpen} />
         ))}
       </div>
     </section>
   )
 }
 
-function ItemRow({ item }: { item: Item }) {
-  const done = item.status === 'done'
+function GearIcon({ className }: { className?: string }) {
   return (
-    <button
-      onClick={() => setItemStatus(item.id, done ? 'active' : 'done')}
-      className="flex w-full items-center gap-3 rounded-2xl bg-space-700/60 px-4 py-3 text-left ring-1 ring-white/5 transition active:scale-[0.99]"
-    >
-      <span
-        className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 transition ${
-          done ? 'border-nebula-400 bg-nebula-500' : 'border-white/20'
-        }`}
-      >
-        {done && (
-          <svg className="h-3.5 w-3.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="20 6 9 17 4 12" />
-          </svg>
-        )}
-      </span>
-      <span className={`text-mist-100 transition ${done ? 'text-mist-500 line-through' : ''}`}>
-        {item.title}
-      </span>
-    </button>
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
   )
 }
 

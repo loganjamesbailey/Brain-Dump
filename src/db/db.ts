@@ -17,7 +17,7 @@ export type ItemStatus = 'active' | 'snoozed' | 'done' | 'archived'
 
 export interface ChangeEntry {
   at: number
-  kind: 'created' | 'cadence' | 'title' | 'status' | 'note'
+  kind: 'created' | 'cadence' | 'title' | 'area' | 'status' | 'note' | 'done' | 'nextStep'
   from?: string
   to?: string
   dumpId?: string
@@ -36,6 +36,12 @@ export interface Item {
   updatedAt: number
   sourceDumpId?: string
   history: ChangeEntry[]
+  /** When this was last marked done — drives the gentle per-cadence reset. */
+  lastDoneAt?: number
+  /** Consecutive on-rhythm completions. Only ever shown as positive encouragement. */
+  momentum?: number
+  /** If set and in the future, the item rests (no guilt) until then. */
+  snoozedUntil?: number
 }
 
 /** What a brain dump proposes — the user confirms before anything changes. */
