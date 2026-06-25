@@ -36,6 +36,8 @@ export interface Item {
   updatedAt: number
   sourceDumpId?: string
   history: ChangeEntry[]
+  /** Stable identity of the knowledge-base topic this came from (survives renames). */
+  topicKey?: string
   /** When this was last marked done — drives the gentle per-cadence reset. */
   lastDoneAt?: number
   /** Consecutive on-rhythm completions. Only ever shown as positive encouragement. */
@@ -52,6 +54,8 @@ export type Suggestion =
       title: string
       area: LifeArea
       cadence: Cadence
+      /** Stable topic identity, when this add came from a known topic. */
+      key?: string
       raw: string
       accepted?: boolean
     }

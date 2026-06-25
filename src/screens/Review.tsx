@@ -24,8 +24,9 @@ export default function Review() {
     db.dumps.get(reviewDumpId).then((d) => {
       if (!d) return
       setDump(d)
-      // Default everything to accepted — confirming is one tap; opting out is deliberate.
-      setItems(d.suggestions.map((s) => ({ ...s, accepted: true })))
+      // New items are pre-accepted (one-tap capture); CHANGES to existing rhythms are
+      // opt-in, so altering something you already set is always a deliberate choice.
+      setItems(d.suggestions.map((s) => ({ ...s, accepted: s.kind === 'add' })))
     })
   }, [reviewDumpId])
 
@@ -66,7 +67,7 @@ export default function Review() {
   return (
     <div className="flex flex-1 flex-col px-6 pb-10 pt-12">
       <p className="text-sm font-semibold uppercase tracking-widest text-nebula-300">
-        Here's what I heard
+        Here's what came through
       </p>
       <h1 className="mt-2 text-2xl font-semibold leading-snug text-mist-100">
         {nothing
@@ -75,7 +76,7 @@ export default function Review() {
             : 'Nothing new — everything stays as it was.'
           : firstDump
             ? 'Nice work getting it out.'
-            : "Got it. I'll only touch what you mentioned."}
+            : 'Only what you mentioned will change.'}
       </h1>
       <p className="mt-2 text-mist-400">
         {nothing

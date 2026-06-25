@@ -142,8 +142,11 @@ export default function ItemDetail() {
       <div className="pt-4">
         {confirmDelete ? (
           <div className="flex items-center gap-3">
-            <button className="btn-primary flex-1 bg-red-500 shadow-none" onClick={remove}>
-              Delete forever
+            <button
+              className="btn-ghost flex-1 bg-space-600 text-mist-200 ring-1 ring-white/10"
+              onClick={remove}
+            >
+              Yes, delete it
             </button>
             <button className="btn-ghost" onClick={() => setConfirmDelete(false)}>
               Keep

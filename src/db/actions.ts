@@ -2,7 +2,7 @@ import { db, newId, type Dump, type Item, type Profile, type Suggestion } from '
 import { detectTimezone } from '../lib/time'
 import { isOnRhythm } from '../lib/period'
 import type { Cadence, LifeArea } from '../lib/cadence'
-import { buildBackup, type BackupData } from '../lib/backup'
+import { buildBackup, isValidBackup, type BackupData } from '../lib/backup'
 
 export async function getProfile(): Promise<Profile | undefined> {
   return db.profile.get('me')
@@ -20,7 +20,15 @@ export async function createProfile(name: string): Promise<Profile> {
 }
 
 export async function completeOnboarding(): Promise<void> {
-  await db.profile.update('me', { onboardedAt: Date.now() })
+  const now = Date.now()
+  const existing = await db.profile.get('me')
+  // Upsert: Table.update is a no-op when the row is missing (e.g. user skipped the
+  // name), which would otherwise soft-lock them back into onboarding forever.
+  if (existing) {
+    await db.profile.update('me', { onboardedAt: now })
+  } else {
+    await db.profile.put({ id: 'me', name: '', createdAt: now, timezone: detectTimezone(), onboardedAt: now })
+  }
 }
 
 export interface SaveDumpInput {
@@ -61,6 +69,10 @@ export async function applySuggestions(
   const now = Date.now()
 
   await db.transaction('rw', db.items, db.dumps, async () => {
+    // Idempotency: never apply the same dump twice (no duplicate re-adds).
+    const dump = await db.dumps.get(dumpId)
+    if (dump?.reviewedAt) return
+
     for (const s of suggestions) {
       if (!s.accepted) continue
 
@@ -71,6 +83,7 @@ export async function applySuggestions(
           area: s.area,
           cadence: s.cadence,
           status: 'active',
+          topicKey: s.key,
           createdAt: now,
           updatedAt: now,
           sourceDumpId: dumpId,
@@ -126,9 +139,11 @@ export async function markDone(id: string): Promise<void> {
 export async function markUndone(id: string): Promise<void> {
   const item = await db.items.get(id)
   if (!item) return
+  const now = Date.now()
   item.lastDoneAt = undefined
-  item.momentum = Math.max(0, (item.momentum ?? 1) - 1)
-  item.updatedAt = Date.now()
+  item.momentum = Math.max(0, (item.momentum ?? 0) - 1)
+  item.history.push({ at: now, kind: 'done', from: 'done', to: 'undone' })
+  item.updatedAt = now
   await db.items.put(item)
 }
 
@@ -198,13 +213,30 @@ export async function exportAll(exportedAt: number): Promise<BackupData> {
   return buildBackup(profile ?? null, items, dumps, exportedAt)
 }
 
-/** Restore from a backup, replacing current data. Audio (not in backups) is dropped. */
+/**
+ * Restore from a backup, replacing current data. Validates the payload BEFORE
+ * touching anything (no wiping on a bad/empty file), and preserves any on-device
+ * audio for dumps that still exist by id (backups never carry audio).
+ */
 export async function importBackup(data: BackupData): Promise<void> {
+  if (!isValidBackup(data)) {
+    throw new Error('This backup looks incomplete, so nothing was changed.')
+  }
   await db.transaction('rw', db.profile, db.items, db.dumps, async () => {
+    // Keep existing audio blobs keyed by dump id so a restore doesn't destroy them.
+    const existingDumps = await db.dumps.toArray()
+    const audioById = new Map(existingDumps.filter((d) => d.audio).map((d) => [d.id, d]))
+
     await Promise.all([db.profile.clear(), db.items.clear(), db.dumps.clear()])
     if (data.profile) await db.profile.put(data.profile)
-    if (data.items?.length) await db.items.bulkPut(data.items)
-    if (data.dumps?.length) await db.dumps.bulkPut(data.dumps as Dump[])
+    if (data.items.length) await db.items.bulkPut(data.items)
+    if (data.dumps.length) {
+      const restored = data.dumps.map((d) => {
+        const prior = audioById.get(d.id)
+        return prior ? { ...d, audio: prior.audio, audioType: prior.audioType } : (d as Dump)
+      })
+      await db.dumps.bulkPut(restored as Dump[])
+    }
   })
 }
 

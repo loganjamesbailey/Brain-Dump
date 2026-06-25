@@ -90,9 +90,7 @@ export function computeInsight(items: Item[], now: number): Insight {
     )
   }
   if (busiestArea && (areaMap.get(busiestArea) ?? 0) >= 3) {
-    observations.push(
-      `A good share of this is ${AREA_LABEL[busiestArea].toLowerCase()}. Worth noticing where your energy goes.`,
-    )
+    observations.push(`A lot of this lives in ${AREA_LABEL[busiestArea].toLowerCase()} right now.`)
   }
   if (restingCount >= 2 && observations.length < 3) {
     observations.push(`Nice — ${restingCount} things are already handled for now.`)

@@ -1,12 +1,13 @@
+import { useEffect, useMemo, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useApp } from '../store/store'
 import { db, type Item } from '../db/db'
-import { markDone, markUndone } from '../db/actions'
+import { markDone, markUndone, unsnoozeItem } from '../db/actions'
 import { greeting } from '../lib/time'
 import { CADENCE_LABEL, CADENCE_ORDER, type Cadence } from '../lib/cadence'
 import { computeInsight } from '../lib/insights'
 import { selectFocus } from '../lib/focus'
-import { isResting } from '../lib/period'
+import { isResting, isSnoozed } from '../lib/period'
 import ItemRow from '../components/ItemRow'
 
 export default function Home() {
@@ -17,20 +18,38 @@ export default function Home() {
   const profile = useLiveQuery(() => db.profile.get('me'), [])
   const items = useLiveQuery(() => db.items.toArray(), [])
 
-  const now = Date.now()
-  const active = (items ?? []).filter((i) => i.status === 'active')
-  const insight = computeInsight(active, now)
-  const focus = selectFocus(active, now, insight.focusLimit)
+  // A single, slowly-advancing clock so resting→ready transitions happen on their
+  // own and every render uses a stable `now`.
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 60_000)
+    return () => clearInterval(t)
+  }, [])
 
-  const byCadence = CADENCE_ORDER.map((cadence) => ({
-    cadence,
-    items: active
-      .filter((i) => i.cadence === cadence)
-      .sort((a, b) => Number(isResting(a, now)) - Number(isResting(b, now)) || a.title.localeCompare(b.title)),
-  })).filter((g) => g.items.length > 0)
+  const [showMap, setShowMap] = useState(false)
+
+  const active = useMemo(() => (items ?? []).filter((i) => i.status === 'active'), [items])
+  const insight = useMemo(() => computeInsight(active, now), [active, now])
+  const focus = useMemo(() => selectFocus(active, now, insight.focusLimit), [active, now, insight.focusLimit])
+  const byCadence = useMemo(
+    () =>
+      CADENCE_ORDER.map((cadence) => ({
+        cadence,
+        items: active
+          .filter((i) => i.cadence === cadence)
+          .sort(
+            (a, b) =>
+              Number(isResting(a, now) || isSnoozed(a, now)) - Number(isResting(b, now) || isSnoozed(b, now)) ||
+              a.title.localeCompare(b.title),
+          ),
+      })).filter((g) => g.items.length > 0),
+    [active, now],
+  )
 
   function toggle(item: Item) {
-    if (isResting(item, now)) markUndone(item.id)
+    const t = Date.now()
+    if (isSnoozed(item, t)) unsnoozeItem(item.id)
+    else if (isResting(item, t)) markUndone(item.id)
     else markDone(item.id)
   }
   function startDump() {
@@ -38,7 +57,11 @@ export default function Home() {
     go('dump')
   }
 
-  const empty = active.length === 0
+  const loading = items === undefined
+  const empty = !loading && active.length === 0
+  // When the daily load is heavy, keep the home surface to just the anchor and put
+  // the full map behind an explicit choice — minimal on screen by default.
+  const collapseMap = insight.presentationMode === 'one-anchor'
 
   return (
     <div className="flex flex-1 flex-col">
@@ -46,7 +69,9 @@ export default function Home() {
         <header className="flex items-start justify-between">
           <div>
             <p className="text-sm font-medium text-mist-400">{greeting(profile?.name)}</p>
-            <h1 className="mt-1 text-2xl font-semibold text-mist-100">{insight.headline}</h1>
+            <h1 className="mt-1 text-2xl font-semibold text-mist-100">
+              {loading ? ' ' : insight.headline}
+            </h1>
           </div>
           <button
             onClick={() => go('settings')}
@@ -57,12 +82,16 @@ export default function Home() {
           </button>
         </header>
 
-        {empty ? (
+        {loading ? (
+          <div className="mt-24 flex justify-center">
+            <div className="h-2 w-2 animate-breathe rounded-full bg-nebula-400" />
+          </div>
+        ) : empty ? (
           <div className="mt-16 flex flex-col items-center text-center animate-fade-up">
             <div className="mb-6 h-2 w-2 animate-breathe rounded-full bg-nebula-400" />
             <p className="text-lg text-mist-300">Nothing here yet — and that's fine.</p>
             <p className="mt-2 max-w-xs text-mist-500">
-              When you're ready, tap below and talk. I'll turn it into something calm and clear.
+              When you're ready, tap below and talk. It becomes something calm and clear.
             </p>
           </div>
         ) : (
@@ -92,24 +121,36 @@ export default function Home() {
               )}
             </section>
 
-            <div className="mt-10 space-y-8">
-              <h2 className="text-xs font-semibold uppercase tracking-wide text-mist-500">Your map</h2>
-              {byCadence.map((group) => (
-                <CadenceSection
-                  key={group.cadence}
-                  cadence={group.cadence}
-                  items={group.items}
-                  now={now}
-                  onToggle={toggle}
-                  onOpen={(i) => openItem(i.id)}
-                />
-              ))}
-            </div>
+            {collapseMap && !showMap ? (
+              <button
+                className="btn-ghost mt-8 w-full bg-space-700/60"
+                onClick={() => setShowMap(true)}
+              >
+                Browse everything
+              </button>
+            ) : (
+              <div className="mt-10 space-y-8">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-mist-500">Your map</h2>
+                {byCadence.map((group) => (
+                  <CadenceSection
+                    key={group.cadence}
+                    cadence={group.cadence}
+                    items={group.items}
+                    now={now}
+                    onToggle={toggle}
+                    onOpen={(i) => openItem(i.id)}
+                  />
+                ))}
+              </div>
+            )}
           </>
         )}
       </div>
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-space-800 via-space-800/90 to-transparent px-6 pb-8 pt-10">
+      <div
+        className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-space-800 via-space-800/90 to-transparent px-6 pb-8 pt-10"
+        style={{ paddingBottom: 'calc(2rem + env(safe-area-inset-bottom))' }}
+      >
         <button className="btn-primary pointer-events-auto w-full" onClick={startDump}>
           <MicIcon className="h-5 w-5" />
           Brain dump

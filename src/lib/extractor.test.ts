@@ -80,3 +80,45 @@ describe('analyzeDump — returning dump is additive, not destructive', () => {
     expect(reAdded).toBe(false)
   })
 })
+
+describe('analyzeDump — cadence does not bleed across clauses (regression)', () => {
+  const laundryWeekly: Item[] = [makeItem({ title: 'Do laundry', cadence: 'weekly', area: 'laundry' })]
+
+  const cases = [
+    'I do laundry but I want to read daily',
+    'Laundry is fine; I pay bills monthly',
+    'I keep up with laundry while paying bills monthly',
+    "i take my meds that's important i do laundry weekly", // run-on, no punctuation
+  ]
+  for (const transcript of cases) {
+    it(`does not clobber laundry's rhythm in: "${transcript}"`, () => {
+      const { suggestions } = analyzeDump(transcript, laundryWeekly)
+      const clobbered = suggestions.some(
+        (s) => s.kind === 'update' && /laundry/i.test(s.title) && s.to !== 'weekly',
+      )
+      expect(clobbered).toBe(false)
+    })
+  }
+
+  it('still updates when the rhythm cue is adjacent to its own item', () => {
+    const { suggestions } = analyzeDump('I want to do laundry every day now', laundryWeekly)
+    const update = suggestions.find((s) => s.kind === 'update') as any
+    expect(update?.to).toBe('daily')
+  })
+})
+
+describe('analyzeDump — rename-safe dedup (regression)', () => {
+  it('matches a renamed item by topicKey, so it is not duplicated', () => {
+    const renamed: Item[] = [
+      makeItem({ title: 'Meds', cadence: 'daily', area: 'health', topicKey: 'meds' }),
+    ]
+    const { suggestions } = analyzeDump('I really need to take my medicine.', renamed)
+    expect(suggestions.some((s) => s.kind === 'add' && /medicine|meds/i.test(s.title))).toBe(false)
+  })
+
+  it('does not re-add a free-form item that overlaps an existing one', () => {
+    const existing: Item[] = [makeItem({ title: 'Read more books', area: 'other', cadence: 'unsorted' })]
+    const { suggestions } = analyzeDump('I want to read a book.', existing)
+    expect(suggestions.some((s) => s.kind === 'add' && /read|book/i.test(s.title))).toBe(false)
+  })
+})

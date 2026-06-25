@@ -30,7 +30,24 @@ export interface EncryptedEnvelope {
   data: string
 }
 
-const PBKDF2_ITERATIONS = 150_000
+// OWASP-aligned for PBKDF2-SHA256. Envelopes record their own iter, so older
+// backups made with a lower count still decrypt.
+const PBKDF2_ITERATIONS = 600_000
+const MIN_ITERATIONS = 50_000
+const MAX_ITERATIONS = 5_000_000
+
+/** Structural validation so a corrupt/empty file can never trigger a data wipe. */
+export function isValidBackup(data: unknown): data is BackupData {
+  const d = data as Partial<BackupData> | null
+  return (
+    !!d &&
+    d.app === 'brain-dump' &&
+    d.v === 1 &&
+    Array.isArray(d.items) &&
+    Array.isArray(d.dumps) &&
+    d.items.every((i) => i && typeof (i as any).id === 'string' && typeof (i as any).title === 'string')
+  )
+}
 
 function getCrypto(): Crypto {
   const c = (globalThis as any).crypto as Crypto | undefined
@@ -119,9 +136,14 @@ export async function decryptBackup(
   passphrase: string,
 ): Promise<BackupData> {
   const crypto = getCrypto()
+  // Reject an absurd iteration count from an untrusted file (PBKDF2 DoS).
+  const iter = envelope.iter || PBKDF2_ITERATIONS
+  if (!Number.isInteger(iter) || iter < MIN_ITERATIONS || iter > MAX_ITERATIONS) {
+    throw new Error('This backup looks invalid.')
+  }
   const salt = b64ToBytes(envelope.salt)
   const iv = b64ToBytes(envelope.iv)
-  const key = await deriveKey(passphrase, salt, envelope.iter || PBKDF2_ITERATIONS)
+  const key = await deriveKey(passphrase, salt, iter)
   let plain: ArrayBuffer
   try {
     plain = await crypto.subtle.decrypt(

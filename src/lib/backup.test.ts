@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildBackup, encryptBackup, decryptBackup, parseImport } from './backup'
+import { buildBackup, encryptBackup, decryptBackup, parseImport, isValidBackup } from './backup'
 import type { Dump, Profile } from '../db/db'
 import { makeItem } from '../test/factory'
 
@@ -55,5 +55,25 @@ describe('parseImport', () => {
   it('rejects files that are not Brain Dump backups', () => {
     expect(() => parseImport('{"hello":1}')).toThrow(/Brain Dump backup/i)
     expect(() => parseImport('not json')).toThrow()
+  })
+})
+
+describe('isValidBackup', () => {
+  it('accepts a well-formed backup', () => {
+    expect(isValidBackup(buildBackup(profile, items, dumps, 1))).toBe(true)
+  })
+  it('rejects malformed or empty-shaped payloads', () => {
+    expect(isValidBackup(null)).toBe(false)
+    expect(isValidBackup({ app: 'brain-dump', v: 1 })).toBe(false) // missing arrays
+    expect(isValidBackup({ app: 'other', v: 1, items: [], dumps: [] })).toBe(false)
+    expect(isValidBackup({ app: 'brain-dump', v: 1, items: [{ nope: 1 }], dumps: [] })).toBe(false)
+  })
+})
+
+describe('decryptBackup rejects an absurd iteration count (DoS guard)', () => {
+  it('throws before doing the work when iter is out of range', async () => {
+    const env = await encryptBackup(buildBackup(profile, items, dumps, 1), 'passphrase1')
+    await expect(decryptBackup({ ...env, iter: 9_999_999_999 }, 'passphrase1')).rejects.toThrow(/invalid/i)
+    await expect(decryptBackup({ ...env, iter: 10 }, 'passphrase1')).rejects.toThrow(/invalid/i)
   })
 })

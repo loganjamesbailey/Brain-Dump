@@ -124,15 +124,53 @@ function contentWords(s: string): string[] {
     .filter((w) => w.length >= 4 && !STOPWORDS.has(w))
 }
 
-/** True if the phrase shares a meaningful word with an already-captured title. */
-function overlapsSeen(phrase: string, seen: Set<string>): boolean {
+// Broad words that are too generic to imply two items are the same on their own
+// (e.g. "house" in both "Tidy the house" and "Sell the house").
+const WEAK_WORDS = new Set(['house', 'home', 'place', 'room', 'stuff', 'things', 'thing', 'area', 'list', 'routine', 'work'])
+
+/** True if the phrase clearly refers to something already captured. */
+function overlapsSeen(phrase: string, seen: Iterable<string>): boolean {
   const words = new Set(contentWords(phrase))
   // Only stopwords left — not a meaningful new item; assume it's already covered.
   if (words.size === 0) return true
   for (const title of seen) {
-    if (contentWords(title).some((w) => words.has(w))) return true
+    const shared = contentWords(title).filter((w) => words.has(w))
+    if (shared.some((w) => !WEAK_WORDS.has(w))) return true // a specific shared word
+    if (shared.length >= 2) return true // or two generic ones together
   }
   return false
+}
+
+// Clause boundaries — used to keep a topic's cadence cue from bleeding in from a
+// neighbouring clause ("Laundry is fine; I pay bills monthly").
+const CLAUSE_BOUNDARY = /[;,]|\b(?:and|but|then|also|plus|or|while|because|so)\b/
+
+/** First regex match (with position) of any of a topic's patterns. */
+function findMatch(text: string, patterns: RegExp[]): RegExpExecArray | null {
+  let best: RegExpExecArray | null = null
+  for (const p of patterns) {
+    const m = p.exec(text)
+    if (m && (best === null || m.index < best.index)) best = m
+  }
+  return best
+}
+
+/**
+ * Detect the cadence for a topic mention from a TIGHT window around the match:
+ * a few words before and after, cut at clause boundaries. This is the fix for
+ * cadence cues bleeding across items in unpunctuated speech transcripts.
+ */
+function cadenceForMatch(text: string, m: RegExpExecArray): Cadence | null {
+  const afterClause = text.slice(m.index + m[0].length).split(CLAUSE_BOUNDARY)[0]
+  const after = afterClause.trim().split(/\s+/).filter(Boolean).slice(0, 4).join(' ')
+  const beforeParts = text.slice(0, m.index).split(CLAUSE_BOUNDARY)
+  const before = (beforeParts[beforeParts.length - 1] ?? '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(-3)
+    .join(' ')
+  return detectCadence(`${before} ${m[0]} ${after}`)
 }
 
 export interface AnalyzeResult {
@@ -148,24 +186,33 @@ export interface AnalyzeResult {
 export function analyzeDump(transcript: string, existing: Item[]): AnalyzeResult {
   const lower = ' ' + transcript.toLowerCase() + ' '
   const sentences = splitSentences(lower)
+
+  // Match existing items by stable topicKey first (survives renames), then title.
   const activeByTitle = new Map<string, Item>()
+  const activeByKey = new Map<string, Item>()
+  const activeTitles: string[] = []
   for (const it of existing) {
-    if (it.status !== 'archived') activeByTitle.set(norm(it.title), it)
+    if (it.status === 'archived') continue
+    activeByTitle.set(norm(it.title), it)
+    if (it.topicKey) activeByKey.set(it.topicKey, it)
+    activeTitles.push(it.title)
   }
 
   const suggestions: Suggestion[] = []
   const seenTitles = new Set<string>()
 
-  const considerTopic = (title: string, area: LifeArea, defaultCadence: Cadence, raw: string) => {
-    const key = norm(title)
-    if (seenTitles.has(key)) return
-    seenTitles.add(key)
+  const considerTopic = (
+    title: string,
+    area: LifeArea,
+    cued: Cadence | null,
+    defaultCadence: Cadence,
+    topicKey?: string,
+  ) => {
+    const nk = norm(title)
+    if (seenTitles.has(nk)) return
+    seenTitles.add(nk)
 
-    // Cadence: explicit cue in the mention wins; else the topic default.
-    const cued = detectCadence(raw)
-    const cadence = cued ?? defaultCadence
-
-    const existingItem = activeByTitle.get(key)
+    const existingItem = (topicKey ? activeByKey.get(topicKey) : undefined) ?? activeByTitle.get(nk)
     if (existingItem) {
       // Returning dump: only surface a change if the user explicitly re-stated a
       // rhythm and it differs. Otherwise leave it completely untouched.
@@ -177,7 +224,7 @@ export function analyzeDump(transcript: string, existing: Item[]): AnalyzeResult
           from: existingItem.cadence,
           to: cued,
           title: existingItem.title,
-          raw: raw.trim(),
+          raw: title,
         })
       }
       return
@@ -188,18 +235,17 @@ export function analyzeDump(transcript: string, existing: Item[]): AnalyzeResult
       tempId: newId('s'),
       title,
       area,
-      cadence,
-      raw: raw.trim(),
+      cadence: cued ?? defaultCadence,
+      key: topicKey,
+      raw: title,
     })
   }
 
-  // 1) Known topics — find the sentence each is mentioned in (for cadence context).
+  // 1) Known topics — cadence is read from a tight window around the actual match.
   for (const topic of TOPICS) {
-    const matched = topic.patterns.some((p) => p.test(lower))
-    if (!matched) continue
-    const sentence =
-      sentences.find((s) => topic.patterns.some((p) => p.test(s))) ?? lower
-    considerTopic(topic.title, topic.area, topic.cadence, sentence)
+    const m = findMatch(lower, topic.patterns)
+    if (!m) continue
+    considerTopic(topic.title, topic.area, cadenceForMatch(lower, m), topic.cadence, topic.key)
   }
 
   // 2) Free-form intentions not covered by the KB. Split into clauses at
@@ -212,10 +258,9 @@ export function analyzeDump(transcript: string, existing: Item[]): AnalyzeResult
     if (!m) continue
     const phrase = cleanPhrase(m[2] ?? '')
     if (!phrase || phrase.length < 3) continue
-    // Skip if it clearly overlaps something we already captured.
-    if (overlapsSeen(phrase, seenTitles)) continue
-    const cadence = detectCadence(clause) ?? 'unsorted'
-    considerTopic(titleCase(phrase), 'other', cadence, clause)
+    // Skip if it overlaps something captured this dump OR an existing item.
+    if (overlapsSeen(phrase, seenTitles) || overlapsSeen(phrase, activeTitles)) continue
+    considerTopic(titleCase(phrase), 'other', detectCadence(clause), 'unsorted')
   }
 
   return { suggestions, reflection: buildReflection(suggestions, existing.length > 0) }
@@ -227,8 +272,8 @@ function buildReflection(suggestions: Suggestion[], returning: boolean): string 
 
   if (adds === 0 && updates === 0) {
     return returning
-      ? "Got it — nothing new to add here. Everything else stays exactly as it was."
-      : "I didn't catch anything specific yet. No worries — tap the button and just talk, even a little."
+      ? 'Nothing new to add here. Everything else stays exactly as it was.'
+      : 'Nothing specific came through yet. No worries — tap the button and just talk, even a little.'
   }
 
   const parts: string[] = []
@@ -236,6 +281,6 @@ function buildReflection(suggestions: Suggestion[], returning: boolean): string 
   if (updates > 0) parts.push(`${updates} update${updates === 1 ? '' : 's'} to what you already had`)
   const what = parts.join(' and ')
   return returning
-    ? `Heard you. I've got ${what}. Anything you didn't mention stays untouched.`
-    : `Nice work getting that out. I picked up ${what}. Have a look — you're in control of all of it.`
+    ? `${what}, captured. Anything you didn't mention stays untouched.`
+    : `Nice work getting that out. ${what}, captured — have a look. You're in control of all of it.`
 }

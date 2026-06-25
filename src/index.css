@@ -26,6 +26,9 @@ body {
 #root {
   display: flex;
   flex-direction: column;
+  /* Respect the notch / home indicator in installed (standalone) PWA mode. */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 @layer components {

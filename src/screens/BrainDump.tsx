@@ -24,15 +24,42 @@ export default function BrainDump() {
   const recorderRef = useRef<RecorderHandle | null>(null)
   const rafRef = useRef(0)
   const finalRef = useRef('')
+  const interimRef = useRef('')
+  const mountedRef = useRef(true)
+  const finishingRef = useRef(false)
   const speechOk = isSpeechSupported()
+
+  const DRAFT_KEY = 'brain-dump:draft'
+
+  // Restore a draft transcript if a previous session was interrupted (e.g. a
+  // service-worker update reloaded the page mid-dump).
+  useEffect(() => {
+    const saved = localStorage.getItem(DRAFT_KEY)
+    if (saved) {
+      finalRef.current = saved
+      setFinalText(saved)
+    }
+  }, [])
 
   useEffect(() => {
     return () => {
+      mountedRef.current = false
       speechRef.current?.stop()
       recorderRef.current?.cancel()
       cancelAnimationFrame(rafRef.current)
     }
   }, [])
+
+  // Warn before leaving while actively listening, so an in-progress dump isn't lost.
+  useEffect(() => {
+    if (phase !== 'listening') return
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [phase])
 
   async function startListening() {
     setNotice(null)
@@ -40,7 +67,7 @@ export default function BrainDump() {
 
     recorderRef.current = await startRecording()
     if (!recorderRef.current && !speechOk) {
-      setNotice('I need microphone access to listen. You can also type below.')
+      setNotice('Microphone access is needed to listen. You can also type below.')
     }
 
     if (speechOk) {
@@ -48,8 +75,12 @@ export default function BrainDump() {
         onFinal: (t) => {
           finalRef.current = t
           setFinalText(t)
+          localStorage.setItem(DRAFT_KEY, t)
         },
-        onInterim: setInterim,
+        onInterim: (i) => {
+          interimRef.current = i
+          setInterim(i)
+        },
         onError: (msg) => {
           if (msg.includes('not-allowed') || msg.includes('denied')) {
             setNotice('Microphone access is blocked. You can type below instead.')
@@ -66,13 +97,18 @@ export default function BrainDump() {
   }
 
   async function finish() {
+    if (finishingRef.current) return
+    finishingRef.current = true
     setPhase('processing')
     speechRef.current?.stop()
+    speechRef.current = null
     cancelAnimationFrame(rafRef.current)
     const rec = await recorderRef.current?.stop()
+    recorderRef.current = null
     setInterim('')
 
-    const transcript = (finalRef.current || finalText).trim()
+    // Fold any trailing un-finalized words in so nothing said is dropped.
+    const transcript = [finalRef.current || finalText, interimRef.current].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim()
     const existing = await db.items.toArray()
     const { suggestions } = analyzeDump(transcript, existing)
 
@@ -85,7 +121,8 @@ export default function BrainDump() {
       suggestions,
     })
 
-    startReview(dumpId)
+    localStorage.removeItem(DRAFT_KEY)
+    if (mountedRef.current) startReview(dumpId)
   }
 
   const liveText = [finalText, interim].filter(Boolean).join(' ')
@@ -111,7 +148,7 @@ export default function BrainDump() {
             <p className="mt-4 text-lg leading-relaxed text-mist-400">
               {firstDump
                 ? 'Say whatever comes — the things you want to keep up with and the things that slip. No order needed.'
-                : 'Tell me what changed or what’s new. I’ll leave everything else exactly as it is.'}
+                : 'Just say what changed or what’s new. Everything else stays exactly as it is.'}
             </p>
           </div>
         )}
@@ -124,7 +161,7 @@ export default function BrainDump() {
               </p>
             ) : (
               <p className="text-lg text-mist-500">
-                {phase === 'processing' ? 'Making sense of it…' : 'Listening… take your time.'}
+                {phase === 'processing' ? 'Organizing…' : 'Listening… take your time.'}
               </p>
             )}
           </div>
