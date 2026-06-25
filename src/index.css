@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: #0e0b1a;
+  color: #f5f3ff;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* respect the notch / home indicator */
+  overscroll-behavior-y: none;
+}
+
+/* The whole app lives inside the safe area, on a calm space backdrop. */
+#root {
+  display: flex;
+  flex-direction: column;
+}
+
+@layer components {
+  /* A soft, calm primary button — big tap target, gentle. */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-2xl bg-nebula-500 px-6 py-4 text-base font-semibold text-white shadow-lg shadow-nebula-600/20 transition active:scale-[0.98] disabled:opacity-40;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-3 text-base font-medium text-mist-300 transition hover:text-mist-100 active:scale-[0.98];
+  }
+
+  .card {
+    @apply rounded-3xl bg-space-700/70 p-5 ring-1 ring-white/5 backdrop-blur;
+  }
+
+  .field {
+    @apply w-full rounded-2xl bg-space-700 px-5 py-4 text-lg text-mist-100 outline-none ring-1 ring-white/10 placeholder:text-mist-500 focus:ring-2 focus:ring-nebula-400;
+  }
+}
+
+/* Calm scrollbars */
+::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
